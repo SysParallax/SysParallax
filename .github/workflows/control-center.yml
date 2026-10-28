@@ -1,0 +1,64 @@
+name: SysParallax Control Center
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows:
+      - SysParallax CI
+      - SysParallax Security
+    types: [completed]
+  issues:
+    types: [opened, edited, reopened, closed, labeled, unlabeled]
+  pull_request_target:
+    types: [opened, reopened, closed, synchronize, edited, ready_for_review, converted_to_draft]
+  release:
+    types: [published, edited, deleted, unpublished]
+  schedule:
+    # Tous les 30 min (l'exécution planifiée peut être retardée par GitHub)
+    - cron: '17,47 * * * *'
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: sysparallax-control-center
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update the single pinned Discord dashboard
+    # Ignore notifications triggered by workflows from forks.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      # Always run reviewed code from main, never code supplied by a PR.
+      - name: Checkout trusted main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test Control Center logic
+        run: python -m unittest discover -s tests -p 'test_control_center.py' -v
+
+      - name: Refresh Discord message
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CONTROL_CENTER_CHANNEL_ID: ${{ vars.DISCORD_CONTROL_CENTER_CHANNEL_ID }}
+          SYSPARALLAX_HEALTHCHECKS: ${{ vars.SYSPARALLAX_HEALTHCHECKS }}
+        run: python scripts/control_center.py
