@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: govulncheck (official Go action)
+      - name: Govulncheck (official Go action)
         uses: golang/govulncheck-action@v1
         with:
           go-package: ./...
@@ -38,16 +38,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [go, javascript-typescript]
+        include:
+          - language: go
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
           queries: security-extended
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
+      - name: Build Go for CodeQL (never launch server)
+        if: matrix.language == 'go'
+        run: go build ./...
       - name: Analyze
         uses: github/codeql-action/analyze@v4
