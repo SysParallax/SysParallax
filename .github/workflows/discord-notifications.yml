@@ -1,0 +1,103 @@
+name: SysParallax Discord Notifications
+
+# Secrets are never passed into untrusted PR build/test jobs.
+# workflow_run executes from the default branch; no PR code is checked out here.
+on:
+  workflow_run:
+    workflows:
+      - SysParallax CI
+      - SysParallax Security
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Discord channel for a safe test message
+        type: choice
+        required: true
+        default: ci-cd
+        options:
+          - ci-cd
+          - alertes
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Send workflow summary to Discord
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send message (metadata only; no checkout)
+        env:
+          CICD_URL: ${{ secrets.DISCORD_CICD_WEBHOOK }}
+          ALERTS_URL: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
+          EVENT_TYPE: ${{ github.event_name }}
+          TEST_CHANNEL: ${{ inputs.channel || 'ci-cd' }}
+          SOURCE_WORKFLOW: ${{ github.event.workflow_run.name || 'Test de notification' }}
+          SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion || 'success' }}
+          SOURCE_URL: ${{ github.event.workflow_run.html_url || format('https://github.com/{0}/actions/runs/{1}', github.repository, github.run_id) }}
+          SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          SOURCE_EVENT: ${{ github.event.workflow_run.event || github.event_name }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          is_test = os.environ["EVENT_TYPE"] == "workflow_dispatch"
+          outcome = os.environ["SOURCE_CONCLUSION"].lower()
+          name = os.environ["SOURCE_WORKFLOW"][:120]
+          branch = os.environ["SOURCE_BRANCH"][:120]
+          run_url = os.environ["SOURCE_URL"]
+          event = os.environ["SOURCE_EVENT"][:64]
+
+          colors = {
+              "success": 0x2ECC71,
+              "failure": 0xE74C3C,
+              "timed_out": 0xE67E22,
+              "cancelled": 0x95A5A6,
+          }
+          color = colors.get(outcome, 0x3498DB)
+
+          def send(webhook, target):
+              if not webhook:
+                  raise RuntimeError(
+                      f"Le secret Discord du salon {target} est absent. "
+                      "Voir Settings > Secrets and variables > Actions."
+                  )
+              payload = {
+                  "username": "SysParallax CI",
+                  "allowed_mentions": {"parse": []},
+                  "embeds": [{
+                      "title": ("TEST / " if is_test else "") + name,
+                      "url": run_url,
+                      "description": (
+                          f"**Resultat :** {outcome.upper()}\n"
+                          f"**Branche :** {branch}\n"
+                          f"**Evenement :** {event}\n"
+                          f"[Voir le workflow sur GitHub]({run_url})"
+                      ),
+                      "color": color,
+                      "footer": {"text": "SysParallax / GitHub Actions"},
+                  }],
+              }
+              request = urllib.request.Request(
+                  webhook,
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  print(f"Notification envoyee au salon {target}: HTTP {response.status}")
+
+          if is_test:
+              target = os.environ["TEST_CHANNEL"]
+              webhook = os.environ["ALERTS_URL"] if target == "alertes" else os.environ["CICD_URL"]
+              send(webhook, target)
+          else:
+              send(os.environ["CICD_URL"], "ci-cd")
+              if outcome in {"failure", "timed_out", "action_required", "startup_failure"}:
+                  send(os.environ["ALERTS_URL"], "alertes")
+          PY
